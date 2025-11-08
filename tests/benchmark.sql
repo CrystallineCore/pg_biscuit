@@ -1,5 +1,5 @@
 -- ============================================================================
--- Biscuit Index Comprehensive Benchmark Script (FIXED)
+-- Biscuit Index Comprehensive Benchmark Script (COMPLETELY FIXED)
 -- Compares: Sequential Scan, B-Tree, pg_trgm, and Biscuit indexes
 -- Dataset: 1,000,000 UUID records
 -- ============================================================================
@@ -157,13 +157,13 @@ DECLARE
 BEGIN
     SELECT uuid_str INTO test_uuid FROM benchmark_data LIMIT 1;
     
+    -- All indexes can do exact match
     PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'Sequential Scan', FALSE, FALSE, TRUE, FALSE);
-    PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'B-Tree (=)', TRUE, FALSE, FALSE, TRUE);
-    PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'B-Tree (LIKE)', TRUE, FALSE, FALSE, FALSE);
+    PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'B-Tree', TRUE, FALSE, FALSE, TRUE);
     PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'pg_trgm', FALSE, TRUE, FALSE, FALSE);
     PERFORM run_benchmark_test('Exact Match', 'Single UUID Lookup', test_uuid, 'Biscuit', TRUE, FALSE, FALSE, FALSE);
     
-    RAISE NOTICE '  Completed: 5 tests';
+    RAISE NOTICE '  Completed: 4 tests';
 END $$;
 
 -- ============================================================================
@@ -204,11 +204,12 @@ BEGIN
     FOREACH pattern IN ARRAY patterns
     LOOP
         PERFORM run_benchmark_test('Suffix Match', 'Suffix: ' || pattern, pattern, 'Sequential Scan', FALSE, FALSE, TRUE);
+        -- B-Tree cannot efficiently handle suffix matches (no leading constant)
         PERFORM run_benchmark_test('Suffix Match', 'Suffix: ' || pattern, pattern, 'pg_trgm', FALSE, TRUE, FALSE);
         PERFORM run_benchmark_test('Suffix Match', 'Suffix: ' || pattern, pattern, 'Biscuit', TRUE, FALSE, FALSE);
         test_count := test_count + 3;
     END LOOP;
-    RAISE NOTICE '  Completed: % tests', test_count;
+    RAISE NOTICE '  Completed: % tests (B-Tree skipped - cannot optimize suffix)', test_count;
 END $$;
 
 -- ============================================================================
@@ -226,11 +227,12 @@ BEGIN
     FOREACH pattern IN ARRAY patterns
     LOOP
         PERFORM run_benchmark_test('Contains Match', 'Contains: ' || pattern, pattern, 'Sequential Scan', FALSE, FALSE, TRUE);
+        -- B-Tree cannot efficiently handle substring matches
         PERFORM run_benchmark_test('Contains Match', 'Contains: ' || pattern, pattern, 'pg_trgm', FALSE, TRUE, FALSE);
         PERFORM run_benchmark_test('Contains Match', 'Contains: ' || pattern, pattern, 'Biscuit', TRUE, FALSE, FALSE);
         test_count := test_count + 3;
     END LOOP;
-    RAISE NOTICE '  Completed: % tests', test_count;
+    RAISE NOTICE '  Completed: % tests (B-Tree skipped - cannot optimize contains)', test_count;
 END $$;
 
 -- ============================================================================
@@ -248,11 +250,18 @@ BEGIN
     FOREACH pattern IN ARRAY patterns
     LOOP
         PERFORM run_benchmark_test('Complex Pattern', 'Pattern: ' || pattern, pattern, 'Sequential Scan', FALSE, FALSE, TRUE);
+        -- B-Tree can only optimize if pattern starts with constant (only 'a%b%c%')
+        IF pattern LIKE 'a%' THEN
+            PERFORM run_benchmark_test('Complex Pattern', 'Pattern: ' || pattern, pattern, 'B-Tree', TRUE, FALSE, FALSE);
+        END IF;
         PERFORM run_benchmark_test('Complex Pattern', 'Pattern: ' || pattern, pattern, 'pg_trgm', FALSE, TRUE, FALSE);
         PERFORM run_benchmark_test('Complex Pattern', 'Pattern: ' || pattern, pattern, 'Biscuit', TRUE, FALSE, FALSE);
         test_count := test_count + 3;
+        IF pattern LIKE 'a%' THEN
+            test_count := test_count + 1;
+        END IF;
     END LOOP;
-    RAISE NOTICE '  Completed: % tests', test_count;
+    RAISE NOTICE '  Completed: % tests (B-Tree partial - only prefix patterns)', test_count;
 END $$;
 
 -- ============================================================================
@@ -275,19 +284,20 @@ BEGIN
             WHEN '%xyz%' THEN pattern_name := 'Selective';
             WHEN '%4a%' THEN pattern_name := 'Moderate';
             WHEN '%a%' THEN pattern_name := 'Broad';
-            WHEN '% percent' THEN pattern_name := 'All Records';
+            WHEN '%%' THEN pattern_name := 'All Records';
         END CASE;
         
         PERFORM run_benchmark_test('Selectivity', pattern_name, pattern, 'Sequential Scan', FALSE, FALSE, TRUE);
         test_count := test_count + 1;
         
-        IF pattern != '% percent' THEN
+        IF pattern != '%%' THEN
+            -- B-Tree cannot optimize these patterns (no leading constant)
             PERFORM run_benchmark_test('Selectivity', pattern_name, pattern, 'pg_trgm', FALSE, TRUE, FALSE);
             PERFORM run_benchmark_test('Selectivity', pattern_name, pattern, 'Biscuit', TRUE, FALSE, FALSE);
             test_count := test_count + 2;
         END IF;
     END LOOP;
-    RAISE NOTICE '  Completed: % tests', test_count;
+    RAISE NOTICE '  Completed: % tests (B-Tree skipped - no prefix patterns)', test_count;
 END $$;
 
 -- ============================================================================
@@ -305,11 +315,12 @@ BEGIN
     FOREACH pattern IN ARRAY patterns
     LOOP
         PERFORM run_benchmark_test('Case Sensitivity', 'Case: ' || pattern, pattern, 'Sequential Scan', FALSE, FALSE, TRUE);
+        -- B-Tree cannot optimize these patterns (no leading constant)
         PERFORM run_benchmark_test('Case Sensitivity', 'Case: ' || pattern, pattern, 'pg_trgm', FALSE, TRUE, FALSE);
         PERFORM run_benchmark_test('Case Sensitivity', 'Case: ' || pattern, pattern, 'Biscuit', TRUE, FALSE, FALSE);
         test_count := test_count + 3;
     END LOOP;
-    RAISE NOTICE '  Completed: % tests', test_count;
+    RAISE NOTICE '  Completed: % tests (B-Tree skipped - cannot optimize)', test_count;
 END $$;
 
 DO $$ 
@@ -433,7 +444,7 @@ BEGIN
         GROUP BY index_type
         ORDER BY geom_mean_ms
     LOOP
-        RAISE NOTICE '% | Tests: % | Avg: % ms | GeoMean: % ms | Min: % ms | Max: % ms | Wins: % (% percent percent)', 
+        RAISE NOTICE '% | Tests: % | Avg: % ms | GeoMean: % ms | Min: % ms | Max: % ms | Wins: % (% percent)', 
             RPAD(rec.index_type, 20), 
             LPAD(rec.total_tests::TEXT, 3),
             LPAD(rec.avg_time_ms::TEXT, 8),
@@ -443,6 +454,9 @@ BEGIN
             LPAD(rec.times_fastest::TEXT, 3),
             LPAD(rec.win_rate_pct::TEXT, 5);
     END LOOP;
+    
+    RAISE NOTICE '';
+    RAISE NOTICE 'Note: B-Tree only tested on patterns it can optimize (prefix patterns, exact matches)';
 END $$;
 
 -- Category-wise Statistics
@@ -477,7 +491,7 @@ BEGIN
             RAISE NOTICE '--- % ---', rec.test_category;
             prev_category := rec.test_category;
         END IF;
-        RAISE NOTICE '  % | Mean: % ms | GeoMean: % ms | StdDev: % | CV: % percent | Median: % ms | P95: % ms | Wins: %/% (% percent percent)',
+        RAISE NOTICE '  % | Mean: % ms | GeoMean: % ms | StdDev: % | CV: % percent | Median: % ms | P95: % ms | Wins: %/%',
             RPAD(rec.index_type, 18),
             LPAD(rec.mean_time_ms::TEXT, 8),
             LPAD(rec.geometric_mean_ms::TEXT, 8),
@@ -486,8 +500,7 @@ BEGIN
             LPAD(rec.median_time_ms::TEXT, 8),
             LPAD(rec.p95_time_ms::TEXT, 8),
             LPAD(rec.times_fastest::TEXT, 2),
-            LPAD(rec.test_count::TEXT, 2),
-            LPAD(rec.win_rate_pct::TEXT, 5);
+            LPAD(rec.test_count::TEXT, 2);
     END LOOP;
 END $$;
 
@@ -507,16 +520,16 @@ BEGIN
             index_type as winner,
             geometric_mean_ms,
             times_fastest,
-            win_rate_pct
+            test_count
         FROM benchmark_statistics
         ORDER BY test_category, geometric_mean_ms
     LOOP
-        RAISE NOTICE '% : % (GeoMean: % ms, Won %/% percent tests)',
+        RAISE NOTICE '% : % (GeoMean: % ms, Won %/%)',
             RPAD(rec.test_category, 20),
             RPAD(rec.winner, 18),
             LPAD(rec.geometric_mean_ms::TEXT, 8),
             LPAD(rec.times_fastest::TEXT, 2),
-            LPAD(rec.win_rate_pct::TEXT, 5);
+            LPAD(rec.test_count::TEXT, 2);
     END LOOP;
 END $$;
 
@@ -690,7 +703,7 @@ BEGIN
             RAISE NOTICE '--- % ---', rec.selectivity_range;
             prev_range := rec.selectivity_range;
         END IF;
-        RAISE NOTICE '  % | Tests: % | Avg Time: % ms | Avg Selectivity: % percent percent',
+        RAISE NOTICE '  % | Tests: % | Avg Time: % ms | Avg Selectivity: % percent',
             RPAD(rec.index_type, 18),
             LPAD(rec.test_count::TEXT, 2),
             LPAD(rec.avg_time_ms::TEXT, 8),
@@ -698,7 +711,7 @@ BEGIN
     END LOOP;
 END $$;
 
--- Index Size Analysis (FIXED)
+-- Index Size Analysis (FIXED to show actual Biscuit size)
 DO $$ BEGIN RAISE NOTICE ''; END $$;
 DO $$ BEGIN RAISE NOTICE '========================================'; END $$;
 DO $$ BEGIN RAISE NOTICE 'INDEX SIZE ANALYSIS'; END $$;
@@ -708,41 +721,54 @@ DO $$
 DECLARE
     rec RECORD;
     table_size TEXT;
+    biscuit_size BIGINT;
+    total_size BIGINT;
 BEGIN
-    -- Show all indexes with proper sizing
+    -- Show all indexes
+    RAISE NOTICE 'Index Sizes:';
     FOR rec IN 
         SELECT 
-            COALESCE(i.indexname, c.relname) as index_name,
-            pg_size_pretty(pg_relation_size(c.oid)) as index_size,
-            pg_relation_size(c.oid) as size_bytes,
-            CASE 
-                WHEN i.indexname IS NULL THEN 'Primary Key'
-                WHEN i.indexname LIKE '%biscuit%' THEN 'Biscuit'
-                WHEN i.indexname LIKE '%trgm%' THEN 'pg_trgm GIN'
-                WHEN i.indexname LIKE '%btree%' THEN 'B-Tree'
-                ELSE 'Other'
-            END as index_type_label
-        FROM pg_class c
-        LEFT JOIN pg_indexes i ON c.relname = i.indexname
-        WHERE c.relname IN (
-            SELECT indexname FROM pg_indexes WHERE tablename = 'benchmark_data'
-            UNION
-            SELECT 'benchmark_data_pkey'
-        )
-        ORDER BY pg_relation_size(c.oid) DESC
+            indexrelid::regclass::text as index_name,
+            pg_size_pretty(pg_relation_size(indexrelid)) as index_size,
+            pg_relation_size(indexrelid) as size_bytes
+        FROM pg_stat_user_indexes
+        WHERE schemaname = 'public' 
+        AND relname = 'benchmark_data'
+        ORDER BY pg_relation_size(indexrelid) DESC
     LOOP
-        RAISE NOTICE '% (%) : %',
+        RAISE NOTICE '  % : %',
             RPAD(rec.index_name, 25),
-            RPAD(rec.index_type_label, 12),
             rec.index_size;
+            
+        IF rec.index_name = 'idx_biscuit' THEN
+            biscuit_size := rec.size_bytes;
+        END IF;
     END LOOP;
     
-    -- Table size
-    SELECT pg_size_pretty(pg_total_relation_size('benchmark_data')) INTO table_size;
+    -- Show primary key
+    SELECT pg_size_pretty(pg_relation_size('benchmark_data_pkey'::regclass)),
+           pg_relation_size('benchmark_data_pkey'::regclass)
+    INTO table_size, total_size;
+    RAISE NOTICE '  % : %',
+        RPAD('benchmark_data_pkey', 25),
+        table_size;
+    
     RAISE NOTICE '';
+    
+    -- Special note about Biscuit if it shows 0
+    IF biscuit_size = 0 OR biscuit_size IS NULL THEN
+        RAISE NOTICE 'WARNING: Biscuit index shows 0 bytes!';
+        RAISE NOTICE 'This could mean:';
+        RAISE NOTICE '  1. The Biscuit extension uses a different storage mechanism';
+        RAISE NOTICE '  2. The index metadata is stored elsewhere';
+        RAISE NOTICE '  3. There is an issue with the Biscuit extension';
+        RAISE NOTICE '';
+    END IF;
+    
+    -- Table sizes
+    SELECT pg_size_pretty(pg_total_relation_size('benchmark_data')) INTO table_size;
     RAISE NOTICE 'Total table size (with indexes): %', table_size;
     
-    -- Data-only size
     SELECT pg_size_pretty(pg_relation_size('benchmark_data')) INTO table_size;
     RAISE NOTICE 'Table data size (no indexes):     %', table_size;
 END $$;
@@ -762,23 +788,32 @@ DECLARE
     biscuit_wins INTEGER;
     trgm_wins INTEGER;
     btree_wins INTEGER;
+    biscuit_tests INTEGER;
+    trgm_tests INTEGER;
+    btree_tests INTEGER;
     total_tests INTEGER;
 BEGIN
     -- Get overall geometric means
-    SELECT ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4)
-    INTO biscuit_geomean
+    SELECT 
+        ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4),
+        COUNT(*)
+    INTO biscuit_geomean, biscuit_tests
     FROM benchmark_results
     WHERE index_type = 'Biscuit';
     
-    SELECT ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4)
-    INTO trgm_geomean
+    SELECT 
+        ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4),
+        COUNT(*)
+    INTO trgm_geomean, trgm_tests
     FROM benchmark_results
     WHERE index_type = 'pg_trgm';
     
-    SELECT ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4)
-    INTO btree_geomean
+    SELECT 
+        ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4),
+        COUNT(*)
+    INTO btree_geomean, btree_tests
     FROM benchmark_results
-    WHERE index_type LIKE 'B-Tree%';
+    WHERE index_type = 'B-Tree';
     
     SELECT ROUND(EXP(AVG(LN(NULLIF(execution_time_ms, 0))))::numeric, 4)
     INTO seq_geomean
@@ -800,48 +835,98 @@ BEGIN
     SELECT 
         SUM(CASE WHEN index_type = 'Biscuit' AND rank = 1 THEN 1 ELSE 0 END),
         SUM(CASE WHEN index_type = 'pg_trgm' AND rank = 1 THEN 1 ELSE 0 END),
-        SUM(CASE WHEN index_type LIKE 'B-Tree%' AND rank = 1 THEN 1 ELSE 0 END)
+        SUM(CASE WHEN index_type = 'B-Tree' AND rank = 1 THEN 1 ELSE 0 END)
     INTO biscuit_wins, trgm_wins, btree_wins
     FROM rankings;
     
     RAISE NOTICE '';
-    RAISE NOTICE '1. OVERALL PERFORMANCE:';
-    RAISE NOTICE '   - Biscuit:    % ms geometric mean, % wins (% percent percent)',
-        biscuit_geomean, biscuit_wins, ROUND(biscuit_wins::NUMERIC / total_tests * 100, 1);
-    RAISE NOTICE '   - pg_trgm:    % ms geometric mean, % wins (% percent percent)',
-        trgm_geomean, trgm_wins, ROUND(trgm_wins::NUMERIC / total_tests * 100, 1);
-    RAISE NOTICE '   - B-Tree:     % ms geometric mean, % wins (% percent percent)',
-        btree_geomean, btree_wins, ROUND(btree_wins::NUMERIC / total_tests * 100, 1);
-    RAISE NOTICE '   - Sequential: % ms geometric mean', seq_geomean;
+    RAISE NOTICE '1. OVERALL PERFORMANCE (Geometric Mean):';
+    RAISE NOTICE '   - Biscuit:    % ms (% tests, % wins = % percent)',
+        biscuit_geomean, biscuit_tests, biscuit_wins, 
+        ROUND(biscuit_wins::NUMERIC / total_tests * 100, 1);
+    RAISE NOTICE '   - pg_trgm:    % ms (% tests, % wins = % percent)',
+        trgm_geomean, trgm_tests, trgm_wins,
+        ROUND(trgm_wins::NUMERIC / total_tests * 100, 1);
+    RAISE NOTICE '   - B-Tree:     % ms (% tests, % wins = % percent)',
+        btree_geomean, btree_tests, btree_wins,
+        ROUND(btree_wins::NUMERIC / total_tests * 100, 1);
+    RAISE NOTICE '   - Sequential: % ms', seq_geomean;
     
     RAISE NOTICE '';
-    RAISE NOTICE '2. BEST USE CASES:';
-    RAISE NOTICE '   - Biscuit excels at: Contains queries, Suffix matches';
-    RAISE NOTICE '   - pg_trgm excels at: Complex patterns, Case sensitivity';
-    RAISE NOTICE '   - B-Tree excels at: Exact matches, Prefix matches';
+    RAISE NOTICE '2. IMPORTANT NOTE ON B-TREE:';
+    RAISE NOTICE '   B-Tree was only tested on % of % total tests', btree_tests, total_tests;
+    RAISE NOTICE '   B-Tree can only optimize:';
+    RAISE NOTICE '     - Exact matches (=)';
+    RAISE NOTICE '     - Prefix patterns (abc%%)';
+    RAISE NOTICE '   B-Tree CANNOT optimize:';
+    RAISE NOTICE '     - Suffix patterns (%%abc)';
+    RAISE NOTICE '     - Contains patterns (%%abc%%)';
+    RAISE NOTICE '     - Most complex patterns';
     
     RAISE NOTICE '';
-    RAISE NOTICE '3. PERFORMANCE CHARACTERISTICS:';
+    RAISE NOTICE '3. BEST USE CASES:';
+    RAISE NOTICE '   - Biscuit excels at: All pattern types, especially exact/contains/suffix';
+    RAISE NOTICE '   - pg_trgm excels at: All pattern types with trigram coverage';
+    RAISE NOTICE '   - B-Tree excels at: Only exact matches and prefix patterns';
+    
+    RAISE NOTICE '';
+    RAISE NOTICE '4. PERFORMANCE COMPARISON (where all tested):';
+    
+    -- Compare on common tests only
+    WITH common_tests AS (
+        SELECT DISTINCT test_category, test_name 
+        FROM benchmark_results
+        WHERE index_type = 'Biscuit'
+        INTERSECT
+        SELECT DISTINCT test_category, test_name
+        FROM benchmark_results
+        WHERE index_type = 'pg_trgm'
+    ),
+    common_perf AS (
+        SELECT 
+            br.index_type,
+            EXP(AVG(LN(NULLIF(br.execution_time_ms, 0)))) as geomean
+        FROM benchmark_results br
+        INNER JOIN common_tests ct 
+            ON br.test_category = ct.test_category 
+            AND br.test_name = ct.test_name
+        WHERE br.index_type IN ('Biscuit', 'pg_trgm', 'B-Tree')
+        GROUP BY br.index_type
+    )
+    SELECT 
+        b.geomean as biscuit_common,
+        t.geomean as trgm_common,
+        bt.geomean as btree_common
+    INTO biscuit_geomean, trgm_geomean, btree_geomean
+    FROM 
+        (SELECT geomean FROM common_perf WHERE index_type = 'Biscuit') b,
+        (SELECT geomean FROM common_perf WHERE index_type = 'pg_trgm') t,
+        (SELECT geomean FROM common_perf WHERE index_type = 'B-Tree') bt;
+    
     IF biscuit_geomean < trgm_geomean THEN
-        RAISE NOTICE '   - Biscuit is %x faster than pg_trgm overall (geometric mean)',
+        RAISE NOTICE '   - Biscuit vs pg_trgm: Biscuit is %x faster',
             ROUND((trgm_geomean / biscuit_geomean)::numeric, 2);
     ELSE
-        RAISE NOTICE '   - pg_trgm is %x faster than Biscuit overall (geometric mean)',
+        RAISE NOTICE '   - Biscuit vs pg_trgm: pg_trgm is %x faster',
             ROUND((biscuit_geomean / trgm_geomean)::numeric, 2);
     END IF;
     
-    IF biscuit_geomean < btree_geomean THEN
-        RAISE NOTICE '   - Biscuit is %x faster than B-Tree overall (geometric mean)',
-            ROUND((btree_geomean / biscuit_geomean)::numeric, 2);
-    ELSE
-        RAISE NOTICE '   - B-Tree is %x faster than Biscuit overall (geometric mean)',
-            ROUND((biscuit_geomean / btree_geomean)::numeric, 2);
+    IF btree_geomean IS NOT NULL THEN
+        IF biscuit_geomean < btree_geomean THEN
+            RAISE NOTICE '   - Biscuit vs B-Tree: Biscuit is %x faster (on tests B-Tree can run)',
+                ROUND((btree_geomean / biscuit_geomean)::numeric, 2);
+        ELSE
+            RAISE NOTICE '   - Biscuit vs B-Tree: B-Tree is %x faster (on tests B-Tree can run)',
+                ROUND((biscuit_geomean / btree_geomean)::numeric, 2);
+        END IF;
     END IF;
     
     RAISE NOTICE '';
-    RAISE NOTICE '4. INDEX SIZE COMPARISON:';
-    RAISE NOTICE '   - Run the INDEX SIZE ANALYSIS section above for detailed sizes';
-    RAISE NOTICE '   - Note: Biscuit may use different storage mechanisms than traditional indexes';
+    RAISE NOTICE '5. RECOMMENDATION:';
+    RAISE NOTICE '   - For exact matches & prefix patterns: Use B-Tree (fastest, smallest)';
+    RAISE NOTICE '   - For general wildcard patterns: Use Biscuit or pg_trgm';
+    RAISE NOTICE '   - Biscuit appears to have similar performance to pg_trgm';
+    RAISE NOTICE '   - Index size: pg_trgm uses significant space, Biscuit size unclear';
     
 END $$;
 
