@@ -1,0 +1,40 @@
+{
+  "name": "pg_biscuit",
+  "abstract": "A fast bitmap-based index for PostgreSQL",
+  "description": "pg_biscuit provides efficient bitmap-based searching with deterministic results.",
+  "version": "0.9.0",
+  "maintainer": [ "Sivaprasad Murali <sivaprasad.off@gmail.com>" ],
+  "license": "mit",
+  "provides": {
+    "pg_biscuit": {
+      "file": "sql/pg_biscuit--1.0.sql",
+      "docfile": "README.md",
+      "version": "0.9.0"
+    }
+  },
+  "tags": [
+    "bitmap",
+    "indexing",
+    "search",
+    "like",
+    "pattern",
+    "matching",
+    "wildcard",
+    "deterministic"
+  ],
+  "release_status": "testing",
+  "resources": {
+    "repository": {
+      "url": "https://github.com/crystallinecore/pg_biscuit",
+      "web": "https://github.com/crystallinecore/pg_biscuit",
+      "type": "git"
+    }
+  },
+  "x_requires": {
+    "PostgreSQL": ">=12.0"
+  },
+  "meta-spec": {
+    "version": "1.0.0",
+    "url": "https://pgxn.org/meta/spec.txt"
+  }
+}
